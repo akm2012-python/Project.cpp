@@ -1,79 +1,150 @@
-#include <DHT.h>
-#include <math.h>
+// =======================================================
+// AI-Based Structural Collapse Risk Prediction System
+// Logistic Regression Model (Pre-trained Weights)
+// With Moving Average + Time-Based Risk Accumulation
+// Non-Blocking Timing using millis()
+// =======================================================
 
-#define DHTPIN 2
-#define DHTTYPE DHT11
+// ---------------- PIN DEFINITIONS ----------------
+const int vibPin = A0;
+const int loadPin = A1;
 
-DHT dht(DHTPIN, DHTTYPE);
+const int greenLED = 8;
+const int yellowLED = 9;
+const int redLED = 10;
+const int buzzer = 11;
 
-// Analog inputs
-int vibrationPin = A0;
-int loadPin = A1;
+// ---------------- MODEL WEIGHTS ----------------
+float w_vib = 5.4;
+float w_load = 4.8;
+float bias = -4.2;
 
-// LED pins
-int greenLED = 8;
-int yellowLED = 9;
-int redLED = 10;
-int buzzer = 11;
+// ---------------- FILTER SETTINGS ----------------
+const int numSamples = 10;
+float vibSamples[numSamples];
+float loadSamples[numSamples];
+int sampleIndex = 0;
 
-// ======= TRAINED MODEL COEFFICIENTS =======
-// Replace these with YOUR trained values if different
-float w_vibration = 0.7;
-float w_temperature = 0.03;
-float w_load = 0.5;
-float w_duration = 0.02;   // simulated internally
-float bias = -8.0;
-// ===========================================
+// ---------------- TIME SETTINGS ----------------
+const unsigned long readInterval = 200;     // 200ms loop
+const unsigned long riskTimeLimit = 5000;   // 5 seconds
 
+unsigned long previousMillis = 0;
+unsigned long highRiskStartTime = 0;
+
+bool highRiskActive = false;
+
+// ---------------- SETUP ----------------
 void setup() {
+
   Serial.begin(9600);
-  dht.begin();
 
   pinMode(greenLED, OUTPUT);
   pinMode(yellowLED, OUTPUT);
   pinMode(redLED, OUTPUT);
   pinMode(buzzer, OUTPUT);
+
+  for (int i = 0; i < numSamples; i++) {
+    vibSamples[i] = 0;
+    loadSamples[i] = 0;
+  }
+
+  Serial.println("AI Structural Collapse Prediction System Started");
 }
 
+// ---------------- SIGMOID FUNCTION ----------------
+float sigmoid(float x) {
+  return 1.0 / (1.0 + exp(-x));
+}
+
+// ---------------- MOVING AVERAGE ----------------
+float movingAverage(float arr[]) {
+  float sum = 0;
+  for (int i = 0; i < numSamples; i++) {
+    sum += arr[i];
+  }
+  return sum / numSamples;
+}
+
+// ---------------- LOOP ----------------
 void loop() {
 
-  // Read Sensors
-  float vibration = analogRead(vibrationPin) / 100.0;   // scale down
-  float load = analogRead(loadPin) / 150.0;             // scale down
-  float temperature = dht.readTemperature();
+  unsigned long currentMillis = millis();
 
-  // Simulated vibration duration (seconds)
-  float duration = millis() / 1000.0;
+  if (currentMillis - previousMillis >= readInterval) {
 
-  // ===== Logistic Regression Equation =====
-  float z = (w_vibration * vibration) +
-            (w_temperature * temperature) +
-            (w_load * load) +
-            (w_duration * duration) +
-            bias;
+    previousMillis = currentMillis;
 
-  float probability = 1.0 / (1.0 + exp(-z));
+    // -------- SENSOR READING --------
+    int vibRaw = analogRead(vibPin);
+    int loadRaw = analogRead(loadPin);
 
-  Serial.print("Collapse Probability: ");
-  Serial.println(probability);
+    float vibNorm = vibRaw / 1023.0;
+    float loadNorm = loadRaw / 1023.0;
 
-  // Reset LEDs
-  digitalWrite(greenLED, LOW);
-  digitalWrite(yellowLED, LOW);
-  digitalWrite(redLED, LOW);
-  digitalWrite(buzzer, LOW);
+    // Store samples
+    vibSamples[sampleIndex] = vibNorm;
+    loadSamples[sampleIndex] = loadNorm;
 
-  // Risk Levels
-  if (probability < 0.4) {
-    digitalWrite(greenLED, HIGH);
+    sampleIndex++;
+    if (sampleIndex >= numSamples) {
+      sampleIndex = 0;
+    }
+
+    // Smoothed values
+    float V = movingAverage(vibSamples);
+    float L = movingAverage(loadSamples);
+
+    // Logistic Regression
+    float z = (w_vib * V) + (w_load * L) + bias;
+    float risk = sigmoid(z);
+
+    // -------- SERIAL OUTPUT --------
+    Serial.print("Vibration: ");
+    Serial.print(V, 3);
+    Serial.print(" | Load: ");
+    Serial.print(L, 3);
+    Serial.print(" | Collapse Probability: ");
+    Serial.println(risk, 3);
+
+    // -------- ALERT LOGIC --------
+
+    if (risk < 0.4) {
+
+      highRiskActive = false;
+      highRiskStartTime = 0;
+
+      digitalWrite(greenLED, HIGH);
+      digitalWrite(yellowLED, LOW);
+      digitalWrite(redLED, LOW);
+      digitalWrite(buzzer, LOW);
+    }
+
+    else if (risk >= 0.4 && risk < 0.7) {
+
+      highRiskActive = false;
+      highRiskStartTime = 0;
+
+      digitalWrite(greenLED, LOW);
+      digitalWrite(yellowLED, HIGH);
+      digitalWrite(redLED, LOW);
+      digitalWrite(buzzer, LOW);
+    }
+
+    else {  // risk >= 0.7
+
+      digitalWrite(greenLED, LOW);
+      digitalWrite(yellowLED, LOW);
+
+      if (!highRiskActive) {
+        highRiskActive = true;
+        highRiskStartTime = currentMillis;
+      }
+
+      if (currentMillis - highRiskStartTime >= riskTimeLimit) {
+        digitalWrite(redLED, HIGH);
+        digitalWrite(buzzer, HIGH);
+      }
+    }
   }
-  else if (probability < 0.7) {
-    digitalWrite(yellowLED, HIGH);
-  }
-  else {
-    digitalWrite(redLED, HIGH);
-    digitalWrite(buzzer, HIGH);
-  }
-
-  delay(1000);
 }
