@@ -12,36 +12,46 @@
 
 // ---------------- AI MODEL COEFFICIENTS ----------------
 // Logistic Model: Risk = 1 / (1 + e^-(aD + bC + c))
-float a = 4.0;   // Deflection effect
-float b = 5.0;   // Crack effect
-float c = -6.0;  // Bias
+float a = 4.0;   
+float b = 5.0;   
+float c = -6.0;  
 
 // ---------------- STRUCTURAL SETTINGS ----------------
-float baselineDistance = 15.0;   // Initial distance (cm)
+float baselineDistance = 0;   
 float fatigueIndex = 0;
 float totalDesignYears = 50;
 
 // ---------------- FUNCTION TO GET STABLE DISTANCE ----------------
 float getDistance() {
 
-  long total = 0;
+  float total = 0;
+  int validReadings = 0;
 
-  for(int i=0; i<5; i++) {
+  for(int i = 0; i < 5; i++) {
+
     digitalWrite(TRIG, LOW);
     delayMicroseconds(2);
     digitalWrite(TRIG, HIGH);
     delayMicroseconds(10);
     digitalWrite(TRIG, LOW);
 
-    long duration = pulseIn(ECHO, HIGH);
+    long duration = pulseIn(ECHO, HIGH, 30000); // 30ms timeout
     float distance = duration * 0.034 / 2;
-    total += distance;
+
+    // Filter unrealistic values
+    if(distance > 2 && distance < 400) {
+      total += distance;
+      validReadings++;
+    }
+
     delay(10);
   }
 
-  return total / 5.0;
+  if(validReadings == 0) return baselineDistance;  
+  return total / validReadings;
 }
 
+// ---------------- SETUP ----------------
 void setup() {
 
   Serial.begin(9600);
@@ -57,25 +67,37 @@ void setup() {
 
   Serial.println("===============================================");
   Serial.println("        SMARTBRIDGE AI SYSTEM STARTED");
+  Serial.println("        Calibrating Baseline...");
   Serial.println("===============================================");
+
+  delay(2000);
+
+  baselineDistance = getDistance();
+
+  Serial.print("Calibrated Baseline Distance: ");
+  Serial.print(baselineDistance);
+  Serial.println(" cm\n");
+
   delay(2000);
 }
 
+// ---------------- MAIN LOOP ----------------
 void loop() {
 
-  // ---------------- SENSOR READINGS ----------------
+  // -------- SENSOR READINGS --------
   float currentDistance = getDistance();
   float deflection = baselineDistance - currentDistance;
   if(deflection < 0) deflection = 0;
 
   int crack = digitalRead(CRACK_PIN) == LOW ? 1 : 0;
 
-  // ---------------- FATIGUE MODEL ----------------
-  if(deflection > 0.2)
-    fatigueIndex += deflection * 1.5;
-
-  if(deflection < 0.1)
-    fatigueIndex -= 0.2;
+  // -------- IMPROVED FATIGUE MODEL --------
+  if(deflection > 0.2) {
+    fatigueIndex += (deflection * deflection) * 0.8;
+  }
+  else if(deflection < 0.1) {
+    fatigueIndex -= 0.3;
+  }
 
   if(fatigueIndex < 0) fatigueIndex = 0;
   if(fatigueIndex > 100) fatigueIndex = 100;
@@ -83,19 +105,25 @@ void loop() {
   float remainingLife = 100 - fatigueIndex;
   float remainingYears = (remainingLife / 100.0) * totalDesignYears;
 
-  // ---------------- AI LOGISTIC MODEL ----------------
+  // -------- LOGISTIC AI MODEL --------
   float z = (a * deflection) + (b * crack) + c;
   float risk = 1.0 / (1.0 + exp(-z));
   float riskPercent = risk * 100;
 
-  // ---------------- HEALTH GRADE ----------------
+  // -------- RISK LEVEL --------
+  String riskLevel;
+  if(riskPercent < 30) riskLevel = "LOW";
+  else if(riskPercent < 70) riskLevel = "MODERATE";
+  else riskLevel = "HIGH";
+
+  // -------- HEALTH GRADE --------
   String grade;
   if(remainingLife > 75) grade = "A (Excellent)";
   else if(remainingLife > 50) grade = "B (Good)";
   else if(remainingLife > 25) grade = "C (Weak)";
   else grade = "D (Critical)";
 
-  // ---------------- DECISION SYSTEM ----------------
+  // -------- DECISION SYSTEM --------
   String status;
 
   if(crack == 1 || riskPercent > 70 || remainingLife < 20) {
@@ -111,7 +139,7 @@ void loop() {
     status = "SAFE";
   }
 
-  // ---------------- PROFESSIONAL SERIAL REPORT ----------------
+  // -------- PROFESSIONAL SERIAL REPORT --------
   Serial.println("=================================================");
   Serial.println("              SMARTBRIDGE AI REPORT");
   Serial.println("=================================================");
@@ -133,7 +161,9 @@ void loop() {
 
   Serial.print("Collapse Probability: ");
   Serial.print(riskPercent);
-  Serial.println(" %");
+  Serial.print(" % (");
+  Serial.print(riskLevel);
+  Serial.println(")");
 
   Serial.print("Fatigue Index: ");
   Serial.print(fatigueIndex);
