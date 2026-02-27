@@ -1,150 +1,182 @@
-// =======================================================
-// AI-Based Structural Collapse Risk Prediction System
-// Logistic Regression Model (Pre-trained Weights)
-// With Moving Average + Time-Based Risk Accumulation
-// Non-Blocking Timing using millis()
-// =======================================================
+#include <math.h>
 
 // ---------------- PIN DEFINITIONS ----------------
-const int vibPin = A0;
-const int loadPin = A1;
+#define TRIG 6
+#define ECHO 7
+#define CRACK_PIN 4
 
-const int greenLED = 8;
-const int yellowLED = 9;
-const int redLED = 10;
-const int buzzer = 11;
+#define WHITE_LED 8
+#define YELLOW_LED 9
+#define RED_LED 10
+#define BUZZER 11
 
-// ---------------- MODEL WEIGHTS ----------------
-float w_vib = 5.4;
-float w_load = 4.8;
-float bias = -4.2;
+// ---------------- AI MODEL COEFFICIENTS ----------------
+// Logistic Model: Risk = 1 / (1 + e^-(aD + bC + c))
+float a = 4.0;   // Deflection effect
+float b = 5.0;   // Crack effect
+float c = -6.0;  // Bias
 
-// ---------------- FILTER SETTINGS ----------------
-const int numSamples = 10;
-float vibSamples[numSamples];
-float loadSamples[numSamples];
-int sampleIndex = 0;
+// ---------------- STRUCTURAL SETTINGS ----------------
+float baselineDistance = 15.0;   // Initial distance (cm)
+float fatigueIndex = 0;
+float totalDesignYears = 50;
 
-// ---------------- TIME SETTINGS ----------------
-const unsigned long readInterval = 200;     // 200ms loop
-const unsigned long riskTimeLimit = 5000;   // 5 seconds
+// ---------------- FUNCTION TO GET STABLE DISTANCE ----------------
+float getDistance() {
 
-unsigned long previousMillis = 0;
-unsigned long highRiskStartTime = 0;
+  long total = 0;
 
-bool highRiskActive = false;
+  for(int i=0; i<5; i++) {
+    digitalWrite(TRIG, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIG, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIG, LOW);
 
-// ---------------- SETUP ----------------
+    long duration = pulseIn(ECHO, HIGH);
+    float distance = duration * 0.034 / 2;
+    total += distance;
+    delay(10);
+  }
+
+  return total / 5.0;
+}
+
 void setup() {
 
   Serial.begin(9600);
 
-  pinMode(greenLED, OUTPUT);
-  pinMode(yellowLED, OUTPUT);
-  pinMode(redLED, OUTPUT);
-  pinMode(buzzer, OUTPUT);
+  pinMode(TRIG, OUTPUT);
+  pinMode(ECHO, INPUT);
+  pinMode(CRACK_PIN, INPUT_PULLUP);
 
-  for (int i = 0; i < numSamples; i++) {
-    vibSamples[i] = 0;
-    loadSamples[i] = 0;
-  }
+  pinMode(WHITE_LED, OUTPUT);
+  pinMode(YELLOW_LED, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
+  pinMode(BUZZER, OUTPUT);
 
-  Serial.println("AI Structural Collapse Prediction System Started");
+  Serial.println("===============================================");
+  Serial.println("        SMARTBRIDGE AI SYSTEM STARTED");
+  Serial.println("===============================================");
+  delay(2000);
 }
 
-// ---------------- SIGMOID FUNCTION ----------------
-float sigmoid(float x) {
-  return 1.0 / (1.0 + exp(-x));
-}
-
-// ---------------- MOVING AVERAGE ----------------
-float movingAverage(float arr[]) {
-  float sum = 0;
-  for (int i = 0; i < numSamples; i++) {
-    sum += arr[i];
-  }
-  return sum / numSamples;
-}
-
-// ---------------- LOOP ----------------
 void loop() {
 
-  unsigned long currentMillis = millis();
+  // ---------------- SENSOR READINGS ----------------
+  float currentDistance = getDistance();
+  float deflection = baselineDistance - currentDistance;
+  if(deflection < 0) deflection = 0;
 
-  if (currentMillis - previousMillis >= readInterval) {
+  int crack = digitalRead(CRACK_PIN) == LOW ? 1 : 0;
 
-    previousMillis = currentMillis;
+  // ---------------- FATIGUE MODEL ----------------
+  if(deflection > 0.2)
+    fatigueIndex += deflection * 1.5;
 
-    // -------- SENSOR READING --------
-    int vibRaw = analogRead(vibPin);
-    int loadRaw = analogRead(loadPin);
+  if(deflection < 0.1)
+    fatigueIndex -= 0.2;
 
-    float vibNorm = vibRaw / 1023.0;
-    float loadNorm = loadRaw / 1023.0;
+  if(fatigueIndex < 0) fatigueIndex = 0;
+  if(fatigueIndex > 100) fatigueIndex = 100;
 
-    // Store samples
-    vibSamples[sampleIndex] = vibNorm;
-    loadSamples[sampleIndex] = loadNorm;
+  float remainingLife = 100 - fatigueIndex;
+  float remainingYears = (remainingLife / 100.0) * totalDesignYears;
 
-    sampleIndex++;
-    if (sampleIndex >= numSamples) {
-      sampleIndex = 0;
-    }
+  // ---------------- AI LOGISTIC MODEL ----------------
+  float z = (a * deflection) + (b * crack) + c;
+  float risk = 1.0 / (1.0 + exp(-z));
+  float riskPercent = risk * 100;
 
-    // Smoothed values
-    float V = movingAverage(vibSamples);
-    float L = movingAverage(loadSamples);
+  // ---------------- HEALTH GRADE ----------------
+  String grade;
+  if(remainingLife > 75) grade = "A (Excellent)";
+  else if(remainingLife > 50) grade = "B (Good)";
+  else if(remainingLife > 25) grade = "C (Weak)";
+  else grade = "D (Critical)";
 
-    // Logistic Regression
-    float z = (w_vib * V) + (w_load * L) + bias;
-    float risk = sigmoid(z);
+  // ---------------- DECISION SYSTEM ----------------
+  String status;
 
-    // -------- SERIAL OUTPUT --------
-    Serial.print("Vibration: ");
-    Serial.print(V, 3);
-    Serial.print(" | Load: ");
-    Serial.print(L, 3);
-    Serial.print(" | Collapse Probability: ");
-    Serial.println(risk, 3);
-
-    // -------- ALERT LOGIC --------
-
-    if (risk < 0.4) {
-
-      highRiskActive = false;
-      highRiskStartTime = 0;
-
-      digitalWrite(greenLED, HIGH);
-      digitalWrite(yellowLED, LOW);
-      digitalWrite(redLED, LOW);
-      digitalWrite(buzzer, LOW);
-    }
-
-    else if (risk >= 0.4 && risk < 0.7) {
-
-      highRiskActive = false;
-      highRiskStartTime = 0;
-
-      digitalWrite(greenLED, LOW);
-      digitalWrite(yellowLED, HIGH);
-      digitalWrite(redLED, LOW);
-      digitalWrite(buzzer, LOW);
-    }
-
-    else {  // risk >= 0.7
-
-      digitalWrite(greenLED, LOW);
-      digitalWrite(yellowLED, LOW);
-
-      if (!highRiskActive) {
-        highRiskActive = true;
-        highRiskStartTime = currentMillis;
-      }
-
-      if (currentMillis - highRiskStartTime >= riskTimeLimit) {
-        digitalWrite(redLED, HIGH);
-        digitalWrite(buzzer, HIGH);
-      }
-    }
+  if(crack == 1 || riskPercent > 70 || remainingLife < 20) {
+    redMode();
+    status = "DANGER";
   }
+  else if(riskPercent > 40) {
+    yellowMode();
+    status = "WARNING";
+  }
+  else {
+    whiteMode();
+    status = "SAFE";
+  }
+
+  // ---------------- PROFESSIONAL SERIAL REPORT ----------------
+  Serial.println("=================================================");
+  Serial.println("              SMARTBRIDGE AI REPORT");
+  Serial.println("=================================================");
+
+  Serial.print("Baseline Distance: ");
+  Serial.print(baselineDistance);
+  Serial.println(" cm");
+
+  Serial.print("Current Distance: ");
+  Serial.print(currentDistance);
+  Serial.println(" cm");
+
+  Serial.print("Bridge Deflection: ");
+  Serial.print(deflection);
+  Serial.println(" cm");
+
+  Serial.print("Crack Status: ");
+  Serial.println(crack ? "CRACK DETECTED" : "NO CRACK");
+
+  Serial.print("Collapse Probability: ");
+  Serial.print(riskPercent);
+  Serial.println(" %");
+
+  Serial.print("Fatigue Index: ");
+  Serial.print(fatigueIndex);
+  Serial.println(" %");
+
+  Serial.print("Remaining Structural Life: ");
+  Serial.print(remainingLife);
+  Serial.println(" %");
+
+  Serial.print("Estimated Remaining Service Years: ");
+  Serial.print(remainingYears);
+  Serial.println(" years");
+
+  Serial.print("Structural Health Grade: ");
+  Serial.println(grade);
+
+  Serial.print("Traffic Signal Status: ");
+  Serial.println(status);
+
+  Serial.println("=================================================\n");
+
+  delay(1000);
+}
+
+// ---------------- LED + BUZZER MODES ----------------
+
+void whiteMode() {
+  digitalWrite(WHITE_LED, HIGH);
+  digitalWrite(YELLOW_LED, LOW);
+  digitalWrite(RED_LED, LOW);
+  noTone(BUZZER);
+}
+
+void yellowMode() {
+  digitalWrite(WHITE_LED, LOW);
+  digitalWrite(YELLOW_LED, HIGH);
+  digitalWrite(RED_LED, LOW);
+  tone(BUZZER, 1000);
+}
+
+void redMode() {
+  digitalWrite(WHITE_LED, LOW);
+  digitalWrite(YELLOW_LED, LOW);
+  digitalWrite(RED_LED, HIGH);
+  tone(BUZZER, 2000);
 }
